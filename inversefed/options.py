@@ -49,4 +49,8 @@ def options():
     parser.add_argument('--name', default='iv', type=str, help='Name tag for the result table and model.')
     parser.add_argument('--deterministic', action='store_true', help='Disable CUDNN non-determinism.')
     parser.add_argument('--dryrun', action='store_true', help='Run everything for just one step to test functionality.')
+
+    # Custom args
+    parser.add_argument('--labels', type=int, nargs='+', default=None, help='the index of labels which will appear in the dataset')
+
     return parser

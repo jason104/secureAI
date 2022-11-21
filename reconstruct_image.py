@@ -36,7 +36,7 @@ if __name__ == "__main__":
     # Prepare for training
 
     # Get data:
-    loss_fn, trainloader, validloader = inversefed.construct_dataloaders(args.dataset, defs, data_path=args.data_path)
+    loss_fn, trainloader, validloader = inversefed.construct_dataloaders(args.dataset, defs, data_path=args.data_path, included_labels=args.labels)
 
     dm = torch.as_tensor(getattr(inversefed.consts, f"{args.dataset.lower()}_mean"), **setup)[:, None, None]
     ds = torch.as_tensor(getattr(inversefed.consts, f"{args.dataset.lower()}_std"), **setup)[:, None, None]
@@ -221,16 +221,18 @@ if __name__ == "__main__":
     # Save the resulting image
     if args.save_image and not args.dryrun:
         os.makedirs(args.image_path, exist_ok=True)
-        output_denormalized = torch.clamp(output * ds + dm, 0, 1)
-        rec_filename = (
-            f'{validloader.dataset.classes[labels][0]}_{"trained" if args.trained_model else ""}'
-            f"{args.model}_{args.cost_fn}-{args.target_id}.png"
-        )
-        torchvision.utils.save_image(output_denormalized, os.path.join(args.image_path, rec_filename))
+        for idx, (out, label, gt) in enumerate(zip(output, labels, ground_truth)):
+            output_denormalized = torch.clamp(out * ds + dm, 0, 1)
+            rec_filename = (
+                f'{idx:02}'
+                f'_{"trained" if args.trained_model else ""}'
+                f"{args.model}_{args.cost_fn}.png"
+            )
+            torchvision.utils.save_image(output_denormalized, os.path.join(args.image_path, rec_filename))
 
-        gt_denormalized = torch.clamp(ground_truth * ds + dm, 0, 1)
-        gt_filename = f"{validloader.dataset.classes[labels][0]}_ground_truth-{args.target_id}.png"
-        torchvision.utils.save_image(gt_denormalized, os.path.join(args.image_path, gt_filename))
+            gt_denormalized = torch.clamp(gt * ds + dm, 0, 1)
+            gt_filename = f"{validloader.dataset.classes[label][0]}_ground_truth-{target_id+idx}.png"
+            torchvision.utils.save_image(gt_denormalized, os.path.join(args.image_path, gt_filename))
     else:
         rec_filename = None
         gt_filename = None
