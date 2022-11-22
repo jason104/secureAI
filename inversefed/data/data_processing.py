@@ -13,12 +13,15 @@ from .data import _build_bsds_sr, _build_bsds_dn
 from .loss import Classification, PSNR
 
 
-def construct_dataloaders(dataset, defs, data_path='~/data', shuffle=True, normalize=True):
+def construct_dataloaders(dataset, defs, data_path='~/data', shuffle=True, normalize=True, included_labels=None):
     """Return a dataloader with given dataset and augmentation, normalize data?."""
     path = os.path.expanduser(data_path)
 
+    if dataset not in ['CIFAR10'] and included_labels is not None:
+        raise NotImplementedError()
+
     if dataset == 'CIFAR10':
-        trainset, validset = _build_cifar10(path, defs.augmentations, normalize)
+        trainset, validset = _build_cifar10(path, defs.augmentations, normalize, included_labels)
         loss_fn = Classification()
     elif dataset == 'CIFAR100':
         trainset, validset = _build_cifar100(path, defs.augmentations, normalize)
@@ -55,13 +58,22 @@ def construct_dataloaders(dataset, defs, data_path='~/data', shuffle=True, norma
     return loss_fn, trainloader, validloader
 
 
-def _build_cifar10(data_path, augmentations=True, normalize=True):
+def _build_cifar10(data_path, augmentations=True, normalize=True, included_labels=None):
     """Define CIFAR-10 with everything considered."""
     # Load data
     trainset = torchvision.datasets.CIFAR10(root=data_path, train=True, download=True, transform=transforms.ToTensor())
     validset = torchvision.datasets.CIFAR10(root=data_path, train=False, download=True, transform=transforms.ToTensor())
 
-    if cifar10_mean is None:
+    # Filter samples with label in 'included_labels'
+    if included_labels is not None:
+        def filter_dataset(dataset, included_labels):
+            filtered_idx = [idx for idx, label, in enumerate(dataset.targets) if label in included_labels]
+            dataset.data = dataset.data[filtered_idx]
+            dataset.targets = [dataset.targets[idx] for idx in filtered_idx]
+        filter_dataset(trainset, included_labels)
+        filter_dataset(validset, included_labels)
+
+    if  included_labels is None and cifar10_mean is None:
         data_mean, data_std = _get_meanstd(trainset)
     else:
         data_mean, data_std = cifar10_mean, cifar10_std
@@ -203,7 +215,7 @@ def _build_imagenet(data_path, augmentations=True, normalize=True):
 
 
 def _get_meanstd(dataset):
-    cc = torch.cat([trainset[i][0].reshape(3, -1) for i in range(len(trainset))], dim=1)
+    cc = torch.cat([dataset[i][0].reshape(3, -1) for i in range(len(dataset))], dim=1)
     data_mean = torch.mean(cc, dim=1).tolist()
     data_std = torch.std(cc, dim=1).tolist()
     return data_mean, data_std
