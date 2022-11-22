@@ -1,20 +1,19 @@
-"""Run reconstruction in a terminal prompt.
-
+"""
+Run reconstruction in a terminal prompt.
 Optional arguments can be found in inversefed/options.py
 """
 
-import torch
-import torchvision
+import os
+import time
 
+import datetime
+import inversefed
 import numpy as np
 from PIL import Image
-
-import inversefed
-
 from collections import defaultdict
-import datetime
-import time
-import os
+
+import torch
+import torchvision
 
 torch.backends.cudnn.benchmark = inversefed.consts.BENCHMARK
 
@@ -23,10 +22,10 @@ args = inversefed.options().parse_args()
 # Parse training strategy
 defs = inversefed.training_strategy("conservative")
 defs.epochs = args.epochs
+
 # 100% reproducibility?
 if args.deterministic:
     inversefed.utils.set_deterministic()
-
 
 if __name__ == "__main__":
     # Choose GPU device and print status information:
@@ -66,31 +65,39 @@ if __name__ == "__main__":
                 np.array(Image.open("auto.jpg").resize((32, 32), Image.BICUBIC)) / 255, **setup
             )
             ground_truth = ground_truth.permute(2, 0, 1).sub(dm).div(ds).unsqueeze(0).contiguous()
+            
             if not args.label_flip:
                 labels = torch.as_tensor((1,), device=setup["device"])
             else:
                 labels = torch.as_tensor((5,), device=setup["device"])
+
             target_id = -1
         else:
             if args.target_id is None:
                 target_id = np.random.randint(len(validloader.dataset))
             else:
                 target_id = args.target_id
+
             ground_truth, labels = validloader.dataset[target_id]
+
             if args.label_flip:
                 labels = (labels + 1) % len(trainloader.dataset.classes)
+
             ground_truth, labels = (
                 ground_truth.unsqueeze(0).to(**setup),
                 torch.as_tensor((labels,), device=setup["device"]),
             )
+
         img_shape = (3, ground_truth.shape[2], ground_truth.shape[3])
 
     else:
         ground_truth, labels = [], []
+
         if args.target_id is None:
             target_id = np.random.randint(len(validloader.dataset))
         else:
             target_id = args.target_id
+
         while len(labels) < args.num_images:
             img, label = validloader.dataset[target_id]
             target_id += 1
@@ -100,8 +107,10 @@ if __name__ == "__main__":
 
         ground_truth = torch.stack(ground_truth)
         labels = torch.cat(labels)
+
         if args.label_flip:
             labels = (labels + 1) % len(trainloader.dataset.classes)
+
         img_shape = (3, ground_truth.shape[2], ground_truth.shape[3])
 
     # Run reconstruction
@@ -111,6 +120,7 @@ if __name__ == "__main__":
         input_gradient = torch.autograd.grad(target_loss, model.parameters())
         input_gradient = [grad.detach() for grad in input_gradient]
         full_norm = torch.stack([g.norm() for g in input_gradient]).mean()
+
         print(f"Full gradient norm is {full_norm:e}.")
 
         # Run reconstruction in different precision?
@@ -121,6 +131,7 @@ if __name__ == "__main__":
                 setup["dtype"] = torch.half
             else:
                 raise ValueError(f"Unknown data type argument {args.dtype}.")
+
             print(f"Model and input parameter moved to {args.dtype}-precision.")
             dm = torch.as_tensor(inversefed.consts.cifar10_mean, **setup)[:, None, None]
             ds = torch.as_tensor(inversefed.consts.cifar10_std, **setup)[:, None, None]
@@ -177,12 +188,14 @@ if __name__ == "__main__":
 
         # Run reconstruction in different precision?
         if args.dtype != "float":
+
             if args.dtype in ["double", "float64"]:
                 setup["dtype"] = torch.double
             elif args.dtype in ["half", "float16"]:
                 setup["dtype"] = torch.half
             else:
                 raise ValueError(f"Unknown data type argument {args.dtype}.")
+                
             print(f"Model and input parameter moved to {args.dtype}-precision.")
             ground_truth = ground_truth.to(**setup)
             dm = torch.as_tensor(inversefed.consts.cifar10_mean, **setup)[:, None, None]
@@ -211,6 +224,7 @@ if __name__ == "__main__":
         rec_machine = inversefed.FedAvgReconstructor(
             model, (dm, ds), local_gradient_steps, local_lr, config, num_images=args.num_images, use_updates=True
         )
+
         output, stats = rec_machine.reconstruct(input_parameters, labels, img_shape=img_shape, dryrun=args.dryrun)
 
     # Compute stats
@@ -221,6 +235,7 @@ if __name__ == "__main__":
     # Save the resulting image
     if args.save_image and not args.dryrun:
         os.makedirs(args.image_path, exist_ok=True)
+        
         for idx, (out, label, gt) in enumerate(zip(output, labels, ground_truth)):
             output_denormalized = torch.clamp(out * ds + dm, 0, 1)
             rec_filename = (
