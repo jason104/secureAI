@@ -52,5 +52,7 @@ def options():
 
     # Custom args
     parser.add_argument('--labels', type=int, nargs='+', default=None, help='the index of labels which will appear in the dataset')
+    parser.add_argument('--disable-unique-labels', action='store_true', help='if set, the labels of sampled data won\'t be unique')
+    parser.add_argument('--model_ckpt_path', default='', type=str)
 
     return parser

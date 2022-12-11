@@ -3,6 +3,7 @@
 import torch
 import numpy as np
 
+from tqdm.auto import tqdm
 from collections import defaultdict
 
 from .scheduler import GradualWarmupScheduler
@@ -15,7 +16,13 @@ def train(model, loss_fn, trainloader, validloader, defs, setup=dict(dtype=torch
     stats = defaultdict(list)
     optimizer, scheduler = set_optimizer(model, defs)
 
+    early_stop_count = 0
+
+    # save untrained model
+    torch.save(model.state_dict(), f'{defs.save_path}/{0:03}.pt')
+
     for epoch in range(defs.epochs):
+
         model.train()
         step(model, loss_fn, trainloader, optimizer, scheduler, defs, setup, stats)
 
@@ -24,6 +31,22 @@ def train(model, loss_fn, trainloader, validloader, defs, setup=dict(dtype=torch
             validate(model, loss_fn, validloader, defs, setup, stats)
             # Print information about loss and accuracy
             print_status(epoch, loss_fn, optimizer, stats)
+
+        # save model after 'save_epoch' epochs
+        if (epoch % defs.save_epoch == (defs.save_epoch-1)):
+            torch.save(model.state_dict(), f'{defs.save_path}/{epoch+1:03}.pt')
+
+        # check if there's no imporvemnt, if is, halt the training process
+        if ((epoch > 0) and 
+            ((stats["valid_losses"][-1] > min(stats["valid_losses"])) and 
+             (not hasattr(stats, 'valid_Accuracy') or (stats["valid_Accuracy"][-1] < max(stats["valid_Accuracy"]))))):
+            early_stop_count += 1
+        else:
+            early_stop_count = 0
+        
+        if (early_stop_count >= defs.early_stop):
+            print(f'No improvement on valid data for {early_stop_count} epochs, early stop!!!')
+            break
 
         if defs.dryrun:
             break
@@ -36,7 +59,7 @@ def train(model, loss_fn, trainloader, validloader, defs, setup=dict(dtype=torch
 def step(model, loss_fn, dataloader, optimizer, scheduler, defs, setup, stats):
     """Step through one epoch."""
     epoch_loss, epoch_metric = 0, 0
-    for batch, (inputs, targets) in enumerate(dataloader):
+    for batch, (inputs, targets) in enumerate(tqdm(dataloader)):
         # Prep Mini-Batch
         optimizer.zero_grad()
 
