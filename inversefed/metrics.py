@@ -1,6 +1,7 @@
 """This is code based on https://sudomake.ai/inception-score-explained/."""
 import torch
 import torchvision
+import numpy as np
 
 from collections import defaultdict
 
@@ -60,6 +61,28 @@ def total_variation(x):
     dy = torch.mean(torch.abs(x[:, :, :-1, :] - x[:, :, 1:, :]))
     return dx + dy
 
+def symL1(img):
+    width = img.size(dim=2)
+    right = img[:,:,width/2:,:]
+    left = img[:,:,0:width/2,:]
+    return torch.sum(torch.abs(left - right[:,:,::-1,:]))
+
+def ep_total_variation(x, epison):
+    """Anisotropic TV."""
+    #variation = 0
+    #for image in x:
+    #    for channel in image:
+    #        for rowi in range(len(channel)):
+    #            for coli in range(len(channel[0])):
+    #                if rowi > 0 and coli > 0:
+    #                    w = math.exp(-((channel[rowi][coli] - channel[rowi][coli-1]) ** 2 + (channel[rowi][coli] - channel[rowi-1][coli]) ** 2) / (epison ** 2))
+    #                    variation += (w * ((channel[rowi][coli] - channel[rowi][coli-1]) ** 2 + (channel[rowi][coli] - channel[rowi-1][coli]) ** 2)).sqrt()
+    #return variation
+
+    dx = np.array((x[:, :, 1:, 1:] - x[:, :, 1:, :-1]).detach().cpu() ** 2)
+    dy = np.array((x[:, :, 1:, 1:] - x[:, :, :-1, 1:]).detach().cpu() ** 2)
+    w = np.exp(-(dx + dy) / (epison ** 2))
+    return np.sum(np.sqrt(w * (dx + dy)))
 
 
 def activation_errors(model, x1, x2):

@@ -50,6 +50,7 @@ def construct_dataloaders(dataset, defs, data_path='~/data', shuffle=True, norma
         trainset, validset = _build_bsds_dn(path, defs.augmentations, normalize, noise_level=25 / 255, RGB=True)
         loss_fn = PSNR()
 
+
     if (MULTITHREAD_DATAPROCESSING):
         num_workers = min(torch.get_num_threads(), MULTITHREAD_DATAPROCESSING) if torch.get_num_threads() > 1 else 0
     else:
@@ -102,6 +103,7 @@ def _build_cifar10(data_path, augmentations=True, normalize=True, included_label
     validset.transform = transform
 
     return trainset, validset
+
 
 def _build_cifar100(data_path, augmentations=True, normalize=True):
     """Define CIFAR-100 with everything considered."""
