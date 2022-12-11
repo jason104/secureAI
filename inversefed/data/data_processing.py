@@ -108,6 +108,7 @@ def _build_cifar10(data_path, augmentations=True, normalize=True, included_label
 
     return trainset, validset
 
+
 def _build_cifar100(data_path, augmentations=True, normalize=True):
     """Define CIFAR-100 with everything considered."""
     # Load data

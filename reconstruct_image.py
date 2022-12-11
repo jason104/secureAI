@@ -94,6 +94,19 @@ if __name__ == "__main__":
                 labels = torch.as_tensor((5,), device=setup["device"])
 
             target_id = -1
+        elif args.target_id == -2:
+            # Specify PIL filter for lower pillow versions
+            ground_truth = torch.as_tensor(
+                np.array(Image.open("face.jpg").resize((32, 32), Image.BICUBIC)) / 255, **setup
+            )
+            ground_truth = ground_truth.permute(2, 0, 1).sub(dm).div(ds).unsqueeze(0).contiguous()
+            
+            if not args.label_flip:
+                labels = torch.as_tensor((0,), device=setup["device"])
+            else:
+                labels = torch.as_tensor((1,), device=setup["device"])
+
+            target_id = -2
         else:
             if args.target_id is None:
                 target_id = np.random.randint(len(validloader.dataset))
@@ -143,6 +156,18 @@ if __name__ == "__main__":
         input_gradient = torch.autograd.grad(target_loss, model.parameters())
         input_gradient = [grad.detach() for grad in input_gradient]
         full_norm = torch.stack([g.norm() for g in input_gradient]).mean()
+        #input_gradient_np = np.array(input_gradient)
+        print(f'input gradient shape: ', len(input_gradient), input_gradient[0].shape, input_gradient[3].shape)
+        if args.pruning:
+            for grad in input_gradient:
+                tmp = torch.flatten(grad)
+                tmp = torch.abs(tmp)
+                tmp, indices = torch.sort(tmp)
+                idxx = (tmp.shape[0] // 3) * 2
+                lowerBound = tmp[idxx]
+                gradAbs = torch.abs(grad)
+                grad[gradAbs < lowerBound] = 0
+                #print('number of remaining gradient: ', len(torch.nonzero(grad)))
 
         print(f"Full gradient norm is {full_norm:e}.")
 
@@ -179,6 +204,9 @@ if __name__ == "__main__":
                 filter="none",
                 lr_decay=True,
                 scoring_choice="loss",
+                symLoss=args.symLoss,
+                sim_len=args.sim_len,
+                ep_variation_epison=args.ep_variation_epison
             )
         elif args.optim == "zhu":
             config = dict(
@@ -199,7 +227,7 @@ if __name__ == "__main__":
             )
 
         rec_machine = inversefed.GradientReconstructor(model, (dm, ds), config, num_images=args.num_images)
-        output, stats = rec_machine.reconstruct(input_gradient, labels, img_shape=img_shape, dryrun=args.dryrun)
+        output, stats = rec_machine.reconstruct(input_gradient, labels, img_shape=img_shape, dryrun=args.dryrun, trainSample=trainloader.dataset[0])
 
     else:
         local_gradient_steps = args.accumulation
@@ -242,6 +270,7 @@ if __name__ == "__main__":
             filter="none",
             lr_decay=True,
             scoring_choice=args.scoring_choice,
+            symLoss=args.symLoss
         )
 
         rec_machine = inversefed.FedAvgReconstructor(
