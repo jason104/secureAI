@@ -32,22 +32,44 @@ if __name__ == "__main__":
     setup = inversefed.utils.system_startup(args)
     start_time = time.time()
 
+    # setup['device'] = 'cuda:1'
+
     # Prepare for training
 
     # Get data:
     loss_fn, trainloader, validloader = inversefed.construct_dataloaders(args.dataset, defs, data_path=args.data_path, included_labels=args.labels)
 
-    dm = torch.as_tensor(getattr(inversefed.consts, f"{args.dataset.lower()}_mean"), **setup)[:, None, None]
-    ds = torch.as_tensor(getattr(inversefed.consts, f"{args.dataset.lower()}_std"), **setup)[:, None, None]
+    # Find mean and variance by the information of 'transform' class in dataset
+    # I know it's dirty to write like that, but I want to modify the code as less as possible
+    for t in validloader.dataset.transform.transforms:
+        if isinstance(t, torchvision.transforms.Normalize):
+            dm = torch.as_tensor(t.mean, **setup)[:, None, None]
+            ds = torch.as_tensor(t.std , **setup)[:, None, None]
+            break
+    else:
+        raise Exception("No 'transforms.Normalize' class in dataset")
 
-    if args.dataset == "ImageNet":
+    if args.dataset == 'CIFAR10':
+        num_classes = 10
+    elif args.dataset == 'Food101':
+        num_classes = 101
+    elif args.dataset == 'Flowers102':
+        num_classes = 102
+    else:
+        raise NotImplementedError()
+
+    if args.model_ckpt_path != '':
+        model, _ = inversefed.construct_model(args.model, num_classes=num_classes, num_channels=3)
+        model.load_state_dict(torch.load(args.model_ckpt_path))
+        model_seed = None
+    elif args.dataset == "ImageNet":
         if args.model == "ResNet152":
             model = torchvision.models.resnet152(pretrained=args.trained_model)
         else:
             model = torchvision.models.resnet18(pretrained=args.trained_model)
         model_seed = None
     else:
-        model, model_seed = inversefed.construct_model(args.model, num_classes=10, num_channels=3)
+        model, model_seed = inversefed.construct_model(args.model, num_classes=num_classes, num_channels=3)
     model.to(**setup)
     model.eval()
 
@@ -72,6 +94,19 @@ if __name__ == "__main__":
                 labels = torch.as_tensor((5,), device=setup["device"])
 
             target_id = -1
+        elif args.target_id == -2:
+            # Specify PIL filter for lower pillow versions
+            ground_truth = torch.as_tensor(
+                np.array(Image.open("face.jpg").resize((32, 32), Image.BICUBIC)) / 255, **setup
+            )
+            ground_truth = ground_truth.permute(2, 0, 1).sub(dm).div(ds).unsqueeze(0).contiguous()
+            
+            if not args.label_flip:
+                labels = torch.as_tensor((0,), device=setup["device"])
+            else:
+                labels = torch.as_tensor((1,), device=setup["device"])
+
+            target_id = -2
         else:
             if args.target_id is None:
                 target_id = np.random.randint(len(validloader.dataset))
@@ -101,9 +136,10 @@ if __name__ == "__main__":
         while len(labels) < args.num_images:
             img, label = validloader.dataset[target_id]
             target_id += 1
-            if label not in labels:
-                labels.append(torch.as_tensor((label,), device=setup["device"]))
-                ground_truth.append(img.to(**setup))
+            if ((not args.disable_unique_labels) and (label in labels)):
+                continue
+            labels.append(torch.as_tensor((label,), device=setup["device"]))
+            ground_truth.append(img.to(**setup))
 
         ground_truth = torch.stack(ground_truth)
         labels = torch.cat(labels)
@@ -120,6 +156,18 @@ if __name__ == "__main__":
         input_gradient = torch.autograd.grad(target_loss, model.parameters())
         input_gradient = [grad.detach() for grad in input_gradient]
         full_norm = torch.stack([g.norm() for g in input_gradient]).mean()
+        #input_gradient_np = np.array(input_gradient)
+        print(f'input gradient shape: ', len(input_gradient), input_gradient[0].shape, input_gradient[3].shape)
+        if args.pruning:
+            for grad in input_gradient:
+                tmp = torch.flatten(grad)
+                tmp = torch.abs(tmp)
+                tmp, indices = torch.sort(tmp)
+                idxx = (tmp.shape[0] // 3) * 2
+                lowerBound = tmp[idxx]
+                gradAbs = torch.abs(grad)
+                grad[gradAbs < lowerBound] = 0
+                #print('number of remaining gradient: ', len(torch.nonzero(grad)))
 
         print(f"Full gradient norm is {full_norm:e}.")
 
@@ -156,6 +204,9 @@ if __name__ == "__main__":
                 filter="none",
                 lr_decay=True,
                 scoring_choice="loss",
+                symLoss=args.symLoss,
+                sim_len=args.sim_len,
+                ep_variation_epison=args.ep_variation_epison
             )
         elif args.optim == "zhu":
             config = dict(
@@ -167,7 +218,7 @@ if __name__ == "__main__":
                 lr=1e-4,
                 optim="LBFGS",
                 restarts=args.restarts,
-                max_iterations=300,
+                max_iterations=24_000, #max_iterations=300,
                 total_variation=args.tv,
                 init=args.init,
                 filter="none",
@@ -176,7 +227,7 @@ if __name__ == "__main__":
             )
 
         rec_machine = inversefed.GradientReconstructor(model, (dm, ds), config, num_images=args.num_images)
-        output, stats = rec_machine.reconstruct(input_gradient, labels, img_shape=img_shape, dryrun=args.dryrun)
+        output, stats = rec_machine.reconstruct(input_gradient, labels, img_shape=img_shape, dryrun=args.dryrun, trainSample=trainloader.dataset[0])
 
     else:
         local_gradient_steps = args.accumulation
@@ -219,6 +270,7 @@ if __name__ == "__main__":
             filter="none",
             lr_decay=True,
             scoring_choice=args.scoring_choice,
+            symLoss=args.symLoss
         )
 
         rec_machine = inversefed.FedAvgReconstructor(
@@ -235,7 +287,12 @@ if __name__ == "__main__":
     # Save the resulting image
     if args.save_image and not args.dryrun:
         os.makedirs(args.image_path, exist_ok=True)
-        
+    
+        # prevent dataset without 'classes' entry ('int' to 'str' label mapping)
+        # entry exists in cifar-10 but absent but may absetnt in other dataset
+        if getattr(validloader.dataset, 'classes', None) is None:
+            validloader.dataset.classes = [f'class_{i:03}' for i in range(len(set(validloader.dataset._labels)))]
+    
         for idx, (out, label, gt) in enumerate(zip(output, labels, ground_truth)):
             output_denormalized = torch.clamp(out * ds + dm, 0, 1)
             rec_filename = (

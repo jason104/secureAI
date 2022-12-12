@@ -4,6 +4,8 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 
+from tqdm.auto import tqdm
+
 import os
 from ..consts import *
 
@@ -15,8 +17,8 @@ def construct_dataloaders(dataset, defs, data_path='~/data', shuffle=True, norma
     """Return a dataloader with given dataset and augmentation, normalize data?."""
     path = os.path.expanduser(data_path)
 
-    if (dataset not in ['CIFAR10'] and included_labels is not None):
-        raise NotImplementedError()
+    # if (dataset not in ['CIFAR10'] and included_labels is not None):
+    #     raise NotImplementedError()
 
     if (dataset == 'CIFAR10'):
         trainset, validset = _build_cifar10(path, defs.augmentations, normalize, included_labels)
@@ -50,6 +52,14 @@ def construct_dataloaders(dataset, defs, data_path='~/data', shuffle=True, norma
         trainset, validset = _build_bsds_dn(path, defs.augmentations, normalize, noise_level=25 / 255, RGB=True)
         loss_fn = PSNR()
 
+    elif (dataset == 'Food101'):
+        trainset, validset = _build_food(path, defs.augmentations, normalize)
+        loss_fn = Classification()
+
+    elif (dataset == 'Flowers102'):
+        trainset, validset = _build_flowers(path, defs.augmentations, normalize)
+        loss_fn = Classification()
+
     if (MULTITHREAD_DATAPROCESSING):
         num_workers = min(torch.get_num_threads(), MULTITHREAD_DATAPROCESSING) if torch.get_num_threads() > 1 else 0
     else:
@@ -71,19 +81,14 @@ def _build_cifar10(data_path, augmentations=True, normalize=True, included_label
     validset = torchvision.datasets.CIFAR10(root=data_path, train=False, download=True, transform=transforms.ToTensor())
 
     # Filter samples with label in 'included_labels'
-    if (included_labels is not None):
-        def filter_dataset(dataset, included_labels):
-            filtered_idx = [idx for idx, label, in enumerate(dataset.targets) if label in included_labels]
-            dataset.data = dataset.data[filtered_idx]
-            dataset.targets = [dataset.targets[idx] for idx in filtered_idx]
-        
+    if (included_labels is not None):       
         filter_dataset(trainset, included_labels)
         filter_dataset(validset, included_labels)
 
-    if  (included_labels is None and cifar10_mean is None):
-        data_mean, data_std = _get_meanstd(trainset)
-    else:
-        data_mean, data_std = cifar10_mean, cifar10_std
+    # if  (included_labels is None and cifar10_mean is None):
+    data_mean, data_std = _get_meanstd(trainset)
+    # else:
+        # data_mean, data_std = cifar10_mean, cifar10_std
 
     # Organize preprocessing
     transform = transforms.Compose([
@@ -102,6 +107,7 @@ def _build_cifar10(data_path, augmentations=True, normalize=True, included_label
     validset.transform = transform
 
     return trainset, validset
+
 
 def _build_cifar100(data_path, augmentations=True, normalize=True):
     """Define CIFAR-100 with everything considered."""
@@ -229,10 +235,108 @@ def _build_imagenet(data_path, augmentations=True, normalize=True):
 
     return trainset, validset
 
-
-def _get_meanstd(dataset):
-    cc = torch.cat([dataset[i][0].reshape(3, -1) for i in range(len(dataset))], dim=1)
-    data_mean = torch.mean(cc, dim=1).tolist()
-    data_std = torch.std(cc, dim=1).tolist()
+def _build_food(data_path, augmentations=True, normalize=True, included_labels=None):
+    """Define Food-101 with everything considered."""
+    # Load data
     
+    trainset = torchvision.datasets.Food101(root=data_path, split="train", download=True, transform=transforms.ToTensor())
+    validset = torchvision.datasets.Food101(root=data_path, split="test", download=True, transform=transforms.ToTensor())
+
+    # Filter samples with label in 'included_labels'
+    if (included_labels is not None):
+        filter_dataset(trainset, included_labels)
+        filter_dataset(validset, included_labels)
+
+    if (food101_mean is None):
+        data_mean, data_std = _get_meanstd(trainset, slow_mode=True)
+    else:
+        data_mean, data_std = food101_mean, food101_std
+
+    # Organize preprocessing
+    transform = transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(data_mean, data_std) if normalize else transforms.Lambda(lambda x: x)])
+    
+    if (augmentations):
+        transform_train = transforms.Compose([
+            transforms.Resize(256),
+            transforms.RandomCrop(224, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(data_mean, data_std) if normalize else transforms.Lambda(lambda x : x)
+        ])
+        trainset.transform = transform_train
+    else:
+        trainset.transform = transform
+
+    validset.transform = transform
+
+    return trainset, validset
+
+def _build_flowers(data_path, augmentations=True, normalize=True, included_labels=None):
+    """Define Flowers102 with everything considered."""
+    # Load data
+    
+    trainset = torchvision.datasets.Flowers102(root=data_path, split="train", download=True, transform=transforms.ToTensor())
+    validset = torchvision.datasets.Flowers102(root=data_path, split="test", download=True, transform=transforms.ToTensor())
+
+    # Filter samples with label in 'included_labels'
+    if (included_labels is not None):        
+        filter_dataset(trainset, included_labels)
+        filter_dataset(validset, included_labels)
+
+    data_mean, data_std = _get_meanstd(trainset)
+
+    # Organize preprocessing
+    transform = transforms.Compose([
+        transforms.Resize(64),
+        transforms.CenterCrop(56),
+        transforms.ToTensor(),
+        transforms.Normalize(data_mean, data_std) if normalize else transforms.Lambda(lambda x: x)])
+    
+    if (augmentations):
+        transform_train = transforms.Compose([
+            transforms.Resize(64),
+            transforms.RandomCrop(56, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(data_mean, data_std) if normalize else transforms.Lambda(lambda x : x)
+        ])
+        trainset.transform = transform_train
+    else:
+        trainset.transform = transform
+
+    validset.transform = transform
+
+    return trainset, validset
+
+def _get_meanstd(dataset, slow_mode=False):
+
+    if slow_mode:
+        # mean
+        mean = torch.zeros((3,))
+        for img, _ in tqdm(dataset, desc='Calculate mean'):
+            mean += img.reshape(3, -1).mean(axis=1)
+        mean /= len(dataset)
+        # std
+        std = torch.zeros((3,))
+        for img, _ in tqdm(dataset, desc='Calculate std'):
+            std += torch.square(img.reshape(3, -1) - mean.reshape(3, -1)).mean(axis=1)
+        std /= len(dataset)
+        std = torch.sqrt(std)
+        data_mean = mean.tolist()
+        data_std = std.tolist()
+    else:
+        cc = torch.cat([dataset[i][0].reshape(3, -1) for i in range(len(dataset))], dim=1)
+        data_mean = torch.mean(cc, dim=1).tolist()
+        data_std = torch.std(cc, dim=1).tolist()
+        
     return data_mean, data_std
+
+def filter_dataset(dataset, included_labels):
+
+    filtered_idx = [idx for idx, label, in enumerate(dataset.targets) if label in included_labels]
+    dataset.data = dataset.data[filtered_idx]
+    dataset.targets = [dataset.targets[idx] for idx in filtered_idx]

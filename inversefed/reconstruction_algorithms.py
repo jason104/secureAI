@@ -7,6 +7,8 @@ from .metrics import total_variation as TV
 from .metrics import InceptionScore
 from .medianfilt import MedianPool2d
 from copy import deepcopy
+from .metrics import symL1
+from .metrics import ep_total_variation
 
 import time
 
@@ -23,7 +25,10 @@ DEFAULT_CONFIG = dict(signed=False,
                       init='randn',
                       filter='none',
                       lr_decay=True,
-                      scoring_choice='loss')
+                      scoring_choice='loss',
+                      symLoss=0,
+                      sim_len=0,
+                      ep_variation_epison=0)
 
 def _label_to_onehot(target, num_classes=100):
     target = torch.unsqueeze(target, 1)
@@ -59,7 +64,7 @@ class GradientReconstructor():
         self.loss_fn = torch.nn.CrossEntropyLoss(reduction='mean')
         self.iDLG = True
 
-    def reconstruct(self, input_data, labels, img_shape=(3, 32, 32), dryrun=False, eval=True, tol=None):
+    def reconstruct(self, input_data, labels, img_shape=(3, 32, 32), dryrun=False, eval=True, tol=None, trainSample=None):
         """Reconstruct image from gradient."""
         start_time = time.time()
         if eval:
@@ -124,6 +129,30 @@ class GradientReconstructor():
             return (torch.rand((self.config['restarts'], self.num_images, *img_shape), **self.setup) - 0.5) * 2
         elif self.config['init'] == 'zeros':
             return torch.zeros((self.config['restarts'], self.num_images, *img_shape), **self.setup)
+        elif self.config['init'] == 'pattern':
+            #halfSize = [len(img_shape[1]) // 2, len(img_shape[2]) // 2]
+            pattern = torch.randn((self.config['restarts'], self.num_images, img_shape[0], img_shape[1] // 2, img_shape[2] // 2), **self.setup)
+            tmp1 = torch.cat((pattern, pattern), 4)
+            tmp2 = torch.cat((tmp1, tmp1), 3)
+            background = torch.randn((self.config['restarts'], self.num_images, *img_shape), **self.setup)
+            background[:, :, :, :tmp2.shape[1], :tmp2.shape[2]] = tmp2
+            return background
+        elif self.config['init'] == 'black':
+            tt = torch.zeros((self.config['restarts'], self.num_images, *img_shape), **self.setup)
+            tt = torch.sub(tt, mean_std[0])
+            return torch.div(tt, mean_std[1])
+        elif self.config['init'] == 'white':
+            tt = torch.ones((self.config['restarts'], self.num_images, *img_shape), **self.setup)
+            tt = torch.sub(tt, mean_std[0])
+            return torch.div(tt, mean_std[1])
+        elif self.config['init'] == 'red':
+            tt1 = torch.ones((self.config['restarts'], self.num_images, *img_shape), **self.setup)
+            tt2 = torch.zeros((self.config['restarts'], self.num_images, *img_shape), **self.setup)
+            tt2[:, :, 0, :, :] = tt1[:, :, 0, :, :]
+            tt2 = torch.sub(tt2, mean_std[0])
+            return torch.div(tt2, mean_std[1])
+        elif self.config['init'] == 'trainpic':
+            return trainSample
         else:
             raise ValueError()
 
@@ -197,10 +226,15 @@ class GradientReconstructor():
             gradient = torch.autograd.grad(loss, self.model.parameters(), create_graph=True)
             rec_loss = reconstruction_costs([gradient], input_gradient,
                                             cost_fn=self.config['cost_fn'], indices=self.config['indices'],
-                                            weights=self.config['weights'])
+                                            weights=self.config['weights'],
+                                            sim_len=self.config['sim_len'])
 
-            if self.config['total_variation'] > 0:
+            if self.config['ep_variation_epison'] > 0:
+                rec_loss += 0.05 * self.config['total_variation'] * ep_total_variation(x_trial, self.config['ep_variation_epison'])
+            elif self.config['total_variation'] > 0:
                 rec_loss += self.config['total_variation'] * TV(x_trial)
+            if self.config['symLoss'] > 0:
+                rec_loss += self.config['symLoss'] * symL1(x_trial)
             rec_loss.backward()
             if self.config['signed']:
                 x_trial.grad.sign_()
@@ -215,7 +249,8 @@ class GradientReconstructor():
             gradient = torch.autograd.grad(loss, self.model.parameters(), create_graph=False)
             return reconstruction_costs([gradient], input_gradient,
                                         cost_fn=self.config['cost_fn'], indices=self.config['indices'],
-                                        weights=self.config['weights'])
+                                        weights=self.config['weights'],
+                                        sim_len=self.config['sim_len'])
         elif self.config['scoring_choice'] == 'tv':
             return TV(x_trial)
         elif self.config['scoring_choice'] == 'inception':
@@ -241,7 +276,8 @@ class GradientReconstructor():
         stats['opt'] = reconstruction_costs([gradient], input_data,
                                             cost_fn=self.config['cost_fn'],
                                             indices=self.config['indices'],
-                                            weights=self.config['weights'])
+                                            weights=self.config['weights'],
+                                            sim_len=self.config['sim_len'])
         print(f'Optimal result score: {stats["opt"]:2.4f}')
         return x_optimal, stats
 
@@ -269,10 +305,15 @@ class FedAvgReconstructor(GradientReconstructor):
                                     batch_size=self.batch_size)
             rec_loss = reconstruction_costs([parameters], input_parameters,
                                             cost_fn=self.config['cost_fn'], indices=self.config['indices'],
-                                            weights=self.config['weights'])
+                                            weights=self.config['weights'],
+                                            sim_len=self.config['sim_len'])
 
-            if self.config['total_variation'] > 0:
+            if self.config['ep_variation_epison'] > 0:
+                rec_loss += self.config['total_variation'] * ep_total_variation(x_trial, self.config['ep_variation_epison'])
+            elif self.config['total_variation'] > 0:
                 rec_loss += self.config['total_variation'] * TV(x_trial)
+            if self.config['symLoss'] > 0:
+                rec_loss += self.config['symLoss'] * symL1(x_trial)
             rec_loss.backward()
             if self.config['signed']:
                 x_trial.grad.sign_()
@@ -286,7 +327,8 @@ class FedAvgReconstructor(GradientReconstructor):
                                     local_steps=self.local_steps, lr=self.local_lr, use_updates=self.use_updates)
             return reconstruction_costs([parameters], input_parameters,
                                         cost_fn=self.config['cost_fn'], indices=self.config['indices'],
-                                        weights=self.config['weights'])
+                                        weights=self.config['weights'],
+                                        sim_len=self.config['sim_len'])
         elif self.config['scoring_choice'] == 'tv':
             return TV(x_trial)
         elif self.config['scoring_choice'] == 'inception':
@@ -322,7 +364,7 @@ def loss_steps(model, inputs, labels, loss_fn=torch.nn.CrossEntropyLoss(), lr=1e
     return list(patched_model.parameters.values())
 
 
-def reconstruction_costs(gradients, input_gradient, cost_fn='l2', indices='def', weights='equal'):
+def reconstruction_costs(gradients, input_gradient, cost_fn='l2', indices='def', weights='equal', sim_len=0):
     """Input gradient is given data."""
     if isinstance(indices, list):
         pass
@@ -386,6 +428,12 @@ def reconstruction_costs(gradients, input_gradient, cost_fn='l2', indices='def',
                                                                    0, 1e-10) * weights[i]
         if cost_fn == 'sim':
             costs = 1 + costs / pnorm[0].sqrt() / pnorm[1].sqrt()
+            if sim_len > 0:
+                if pnorm[0] > pnorm[1]:
+                    costs += sim_len * (pnorm[0].sqrt() / pnorm[1].sqrt() - 1)
+                else:
+                    costs += sim_len * (pnorm[1].sqrt() / pnorm[0].sqrt() - 1)
+
 
         # Accumulate final costs
         total_costs += costs
