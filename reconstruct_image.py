@@ -300,14 +300,14 @@ if __name__ == "__main__":
                 #f'_{"trained" if args.trained_model else ""}'
                 #f"{args.model}_{args.cost_fn}.png"
                 f'{target_id+idx}'
-                f"_generated.png"
+                f"_generated_{args.init}_{args.symLoss}.png"
             )
             #torchvision.utils.save_image(output_denormalized, os.path.join(args.image_path, rec_filename))
             torchvision.utils.save_image(output_denormalized, os.path.join('generatedImages', rec_filename))
 
             gt_denormalized = torch.clamp(gt * ds + dm, 0, 1)
             #gt_filename = f"{validloader.dataset.classes[label][0]}_ground_truth-{target_id+idx}.png"
-            gt_filename = f"{target_id+idx}_ground_truth.png"
+            gt_filename = f"{target_id+idx}_ground_truth_{args.init}_{args.symLoss}.png"
             #torchvision.utils.save_image(gt_denormalized, os.path.join(args.image_path, gt_filename))
             torchvision.utils.save_image(gt_denormalized, os.path.join('gtImages', gt_filename))
     else:

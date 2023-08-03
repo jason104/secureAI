@@ -63,9 +63,14 @@ def total_variation(x):
 
 def symL1(img):
     width = img.size(dim=2)
-    right = img[:,:,width/2:,:]
-    left = img[:,:,0:width/2,:]
-    return torch.sum(torch.abs(left - right[:,:,::-1,:]))
+    right = img[:,:,width//2:,:]
+    left = img[:,:,0:width//2,:]
+    summation = 0
+    #print(width)
+    for i in range(width//2):
+        summation += torch.sum(torch.abs(left[:,:,i,:] - right[:,:,-1-i,:]))
+        #return torch.sum(torch.abs(left - right[:,:,::-1,:]))
+    return summation
 
 def ep_total_variation(x, epison):
     """Anisotropic TV."""

@@ -58,6 +58,6 @@ def options():
     parser.add_argument('--symLoss', type=float, default=0, help='symmetric loss')
     parser.add_argument('--sim_len', type=float, default=0, help='loss function gradients length ratio coefficient')
     parser.add_argument('--ep_variation_epison', type=float, default=0, help='edge preserving TV regularization coefficient')
-    parser.add_argument('--pruning', action='store_false', help='Do not prune the gradients.')
+    parser.add_argument('--pruning', action='store_true', help='Do not prune the gradients.')
 
     return parser
